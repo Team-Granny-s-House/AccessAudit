@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Unreachable</title></head>
+<body>
+  <a href="#home">Home</a>
+  <label for="q">Query</label>
+  <input id="q" type="text">
+  <!-- a div used as a button: clickable with a mouse, never focusable by keyboard -->
+  <div class="fake-button" onclick="document.getElementById('out').textContent = 'Searched'">Search</div>
+  <p id="out"></p>
+</body>
+</html>

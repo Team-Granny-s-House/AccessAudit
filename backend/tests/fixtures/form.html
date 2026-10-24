@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Working form</title>
+  <style>.skip { display: block; width: 0; height: 0; overflow: hidden; }</style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main">
+    <label for="email">Email</label>
+    <input id="email" type="email">
+    <label for="city">City</label>
+    <select id="city"><option>Delhi</option><option>Mumbai</option><option>Pune</option></select>
+    <label><input type="checkbox" id="news"> Send me news</label>
+    <a href="#details" id="details-link" onclick="document.getElementById('details').hidden = false; return false;">Show details</a>
+    <p id="details" hidden>Delivery in 3 to 5 days, with free returns within 30 days.</p>
+    <button type="button">Submit order</button>
+  </main>
+</body>
+</html>

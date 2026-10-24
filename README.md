@@ -12,8 +12,8 @@ AccessAudit is being built in stages; this section is updated as each one lands.
 | --- | --- | --- |
 | 0. Scaffold | Project layout, dependencies, `python -m backend.smoke` (all three TinyFish APIs verified) | ✅ Done |
 | 1. Demo site | SkyRail broken and fixed copies (live on Vercel), `cli scan` | ✅ Done |
-| 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ⏳ Next |
-| 3. API | Backend server, stored reports, live events, replays | Not started |
+| 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ✅ Done |
+| 3. API | Backend server, stored reports, live events, replays | ⏳ Next |
 | 4. Web app | Audit form, live view, report, PDF | Not started |
 | 5. Hardening | Real-site audits, baseline cache | Not started |
 | 6. Extras | AI code fixes or a leaderboard | Not started |
@@ -40,7 +40,7 @@ The agents never log in, pay, or submit a form that creates a record. The walker
 | Focus not visible | No outline or box-shadow on the focused element | 2.4.7 Focus Visible | Serious |
 | Low-contrast text | axe-core `color-contrast` | 1.4.3 Contrast | Serious |
 | Image without alt text | axe-core `image-alt` | 1.1.1 Non-text Content | Serious |
-| Focus jumps back up the page | The next focus stop is more than 400 px above the last | 2.4.3 Focus Order | Moderate |
+| Focus jumps back up the page | On the same page, the next focus stop is more than 400 px above the last (not counting the wrap back to the top) | 2.4.3 Focus Order | Moderate |
 | Page language missing | axe-core `html-has-lang` | 3.1.1 Language of Page | Moderate |
 
 Every other WCAG 2.0/2.1 A and AA violation axe-core finds is reported too, with axe's own impact level. The report also notes whether the site links an accessibility statement (not scored).
@@ -61,12 +61,14 @@ The weights are our own choice, not a standard.
 
 | TinyFish feature | Job in AccessAudit |
 | --- | --- |
-| Agent API (`/run-sse`) | Sighted baseline: completes the task and returns its steps as structured JSON via `output_schema` |
+| Agent API (`/run-sse`) | Sighted baseline: completes the task and returns its steps as structured JSON via `output_schema`, with each element's exact label (which the walker matches) and a plain-English description of the step (which the report shows) |
 | Agent live stream (`STREAMING_URL` event) | Embedded live view of the agent's browser while the baseline runs |
 | Browser API (remote Chromium over CDP) | Runs the keyboard walker and the axe-core scans, driven by Playwright; the session is deleted after every audit |
 | Fetch API | Reads the home page to check for an accessibility statement link |
 
 Every site an audit visits must be on a public URL, because TinyFish's cloud browsers can't reach `localhost`.
+
+**Cost per audit (measured):** about $0.21 with a live Agent baseline (Agent about $0.016 per step; Browser about $0.002 per minute), and about $0.002 when the baseline steps are hand-checked or cached.
 
 ## Requirements
 

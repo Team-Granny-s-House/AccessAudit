@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Unnamed</title></head>
+<body>
+  <!-- icon-only button with no accessible name -->
+  <button type="button" id="icon"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg></button>
+  <!-- a button that ignores the keyboard (and the mouse): nothing happens -->
+  <button type="button" id="refresh">Refresh</button>
+  <!-- a button that works: toggles aria-expanded -->
+  <button type="button" id="more" aria-expanded="false"
+          onclick="this.setAttribute('aria-expanded', String(this.getAttribute('aria-expanded') !== 'true'))">More options</button>
+</body>
+</html>

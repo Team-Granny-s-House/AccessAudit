@@ -1,7 +1,8 @@
 # backend/tinyfish_browser.py
-import os, asyncio, httpx
+import os, asyncio, logging, httpx
 from playwright.async_api import async_playwright
 
+log = logging.getLogger("accessaudit")
 BROWSER_API = "https://api.browser.tinyfish.ai"
 HEADERS = {"X-API-Key": os.environ.get("TINYFISH_API_KEY", "")}
 
@@ -16,12 +17,15 @@ async def create_session(url: str) -> dict:
                 await asyncio.sleep(float(r.headers.get("Retry-After", 5)))
                 continue
             r.raise_for_status()
-            return r.json()                     # session_id, cdp_url, base_url
+            session = r.json()                  # session_id, cdp_url, base_url
+            log.info("browser session %s created", session["session_id"])
+            return session
     raise RuntimeError("TinyFish Browser API rate-limited three times")
 
 async def end_session(session_id: str) -> None:
     async with httpx.AsyncClient(timeout=30) as client:
-        await client.delete(f"{BROWSER_API}/{session_id}", headers=HEADERS)
+        r = await client.delete(f"{BROWSER_API}/{session_id}", headers=HEADERS)
+    log.info("browser session %s DELETE -> %s", session_id, r.status_code)
 
 async def open_page(url: str):
     """Returns (pw, browser, page, session_id). session_id is None in local mode."""

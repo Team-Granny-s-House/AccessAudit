@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Trap</title></head>
+<body>
+  <a href="#home">Home</a>
+  <div id="strip">
+    <button type="button">Mon</button>
+    <button type="button">Tue</button>
+    <button type="button">Wed</button>
+  </div>
+  <button type="button">Search</button>
+  <script>
+    // Tab and Shift+Tab cycle between the day buttons and never leave them.
+    const days = Array.from(document.querySelectorAll("#strip button"));
+    days.forEach((day, i) => day.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab") return;
+      e.preventDefault();
+      days[(i + (e.shiftKey ? -1 : 1) + days.length) % days.length].focus();
+    }));
+  </script>
+</body>
+</html>
