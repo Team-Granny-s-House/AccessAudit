@@ -1,0 +1,5 @@
+{"task_completed": true, "steps": [
+  {"action": "click", "element_text": "Find trains", "element_role": "link", "page_url": "index.html"},
+  {"action": "click", "element_text": "Select", "element_role": "button", "page_url": "results.html"},
+  {"action": "type", "element_text": "Passenger name", "element_role": "textbox", "value": "Asha Verma", "page_url": "review.html"}
+]}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trains from New Delhi to Mumbai · SkyRail</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="page-results">
+  <header class="site-header">
+    <div class="bar">
+      <a class="wordmark" href="index.html">
+        <svg aria-hidden="true" viewBox="0 0 32 32"><rect x="5" y="4" width="22" height="20" rx="6" fill="#FFFFFF"/><rect x="9" y="8" width="14" height="7" rx="2" fill="#0F4C81"/><circle cx="11" cy="19" r="2" fill="#0F4C81"/><circle cx="21" cy="19" r="2" fill="#0F4C81"/><path d="M9 28 L12 24 M23 28 L20 24" stroke="#FFFFFF" stroke-width="2"/></svg>
+        SkyRail
+      </a>
+      <span class="bar-note">Fictional demo site</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="route-head">
+      <h1>New Delhi to Mumbai</h1>
+      <p><span id="date-label">Fri 24 Oct</span> · 3 trains</p>
+    </div>
+
+    <div class="toolbar">
+      <button type="button" class="icon-btn" id="filter-btn" aria-label="Filter trains" aria-expanded="false" aria-controls="filter-note">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+      </button>
+      <div class="date-strip" role="group" aria-label="Journey date">
+        <button type="button" class="date-chip" aria-pressed="true" tabindex="0">Fri 24 Oct</button>
+        <button type="button" class="date-chip" aria-pressed="false" tabindex="-1">Sat 25 Oct</button>
+        <button type="button" class="date-chip" aria-pressed="false" tabindex="-1">Sun 26 Oct</button>
+      </div>
+    </div>
+    <p class="filter-note" id="filter-note" hidden>Filters are not available in this demo.</p>
+
+    <ul class="trains">
+      <li class="train">
+        <div><h2>SkyRail Swift</h2><p class="meta">Train 2101 · Chair car</p></div>
+        <div class="times"><span>06:10</span><span class="dur">8h 15m</span><span>14:25</span></div>
+        <div class="buy"><span class="fare">₹1,845</span><button type="button" class="btn select-btn" data-train="2101">Select</button></div>
+      </li>
+      <li class="train">
+        <div><h2>SkyRail Night Rider</h2><p class="meta">Train 2207 · Sleeper</p></div>
+        <div class="times"><span>16:40</span><span class="dur">15h 25m</span><span>08:05 +1</span></div>
+        <div class="buy"><span class="fare">₹2,310</span><button type="button" class="btn select-btn" data-train="2207">Select</button></div>
+      </li>
+      <li class="train">
+        <div><h2>SkyRail Coastal</h2><p class="meta">Train 2315 · Sleeper</p></div>
+        <div class="times"><span>21:15</span><span class="dur">14h 35m</span><span>11:50 +1</span></div>
+        <div class="buy"><span class="fare">₹1,560</span><button type="button" class="btn select-btn" data-train="2315">Select</button></div>
+      </li>
+    </ul>
+  </main>
+
+  <footer class="site-footer">
+    <p>SkyRail is a fictional site for accessibility testing. No real trains, tickets or payments.</p>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

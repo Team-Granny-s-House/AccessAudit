@@ -11,8 +11,8 @@ AccessAudit is being built in stages; this section is updated as each one lands.
 | Stage | What it adds | Status |
 | --- | --- | --- |
 | 0. Scaffold | Project layout, dependencies, `python -m backend.smoke` (all three TinyFish APIs verified) | ✅ Done |
-| 1. Demo site | SkyRail broken and fixed copies, `cli scan` | ⏳ Next |
-| 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | Not started |
+| 1. Demo site | SkyRail broken and fixed copies (live on Vercel), `cli scan` | ✅ Done |
+| 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ⏳ Next |
 | 3. API | Backend server, stored reports, live events, replays | Not started |
 | 4. Web app | Audit form, live view, report, PDF | Not started |
 | 5. Hardening | Real-site audits, baseline cache | Not started |
@@ -159,8 +159,10 @@ SkyRail is a fictional train-booking site in two copies, built to show the diffe
 
 Public URLs:
 
-- Broken: *to be added after deployment*
-- Fixed: *to be added after deployment*
+- Broken: https://skyrail-demo.vercel.app/broken/index.html
+- Fixed: https://skyrail-demo.vercel.app/fixed/index.html
+
+To redeploy after changing the site, run `npx vercel@latest --prod` from `demo-site/`.
 
 ## Replays
 

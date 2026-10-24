@@ -1,0 +1,4 @@
+{
+  "https://skyrail-demo.vercel.app/broken/index.html": "skyrail.json",
+  "https://skyrail-demo.vercel.app/fixed/index.html": "skyrail.json"
+}
