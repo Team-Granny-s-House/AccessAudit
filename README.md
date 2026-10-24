@@ -13,8 +13,8 @@ AccessAudit is being built in stages; this section is updated as each one lands.
 | 0. Scaffold | Project layout, dependencies, `python -m backend.smoke` (all three TinyFish APIs verified) | ✅ Done |
 | 1. Demo site | SkyRail broken and fixed copies (live on Vercel), `cli scan` | ✅ Done |
 | 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ✅ Done |
-| 3. API | Backend server, stored reports, live events, replays | ⏳ Next |
-| 4. Web app | Audit form, live view, report, PDF | Not started |
+| 3. API | Backend server, stored reports, live events, replays | ✅ Done |
+| 4. Web app | Audit form, live view, report, PDF | ⏳ Next |
 | 5. Hardening | Real-site audits, baseline cache | Not started |
 | 6. Extras | AI code fixes or a leaderboard | Not started |
 
@@ -132,6 +132,7 @@ Open http://localhost:3000, pick a preset or enter a URL and task, and press **R
 | `python -m backend.smoke [agent] [browser] [fetch]` | Checks that your key works with each TinyFish API (default: all three) |
 | `python -m backend.cli scan <url>` | Runs only the axe-core scan on one page |
 | `python -m backend.cli audit <url> "<task>" [--override]` | Runs a full audit in the terminal and prints every event and the final report. `--override` uses the hand-checked baseline steps instead of the agent's |
+| `python -m backend.ws_client <url> "<task>"` | With the backend running: starts an audit through the API, prints its live events, and checks the saved report and replay |
 | `python -m pytest backend/tests` | Runs the backend tests (these never call TinyFish) |
 
 The Agent and Browser APIs use TinyFish credits; the tests and `WALKER_MODE=local` don't.
