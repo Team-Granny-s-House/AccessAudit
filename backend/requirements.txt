@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+httpx
+sqlmodel
+rapidfuzz
+python-dotenv
+playwright>=1.49
+pytest
+pytest-asyncio

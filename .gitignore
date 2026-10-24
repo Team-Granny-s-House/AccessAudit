@@ -1,0 +1,10 @@
+Build_Plan.md
+Implementation spec.md
+Phases.md
+.env
+data/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
