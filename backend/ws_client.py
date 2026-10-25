@@ -8,7 +8,7 @@ import httpx
 import websockets
 
 REPORT_KEYS = {"id", "url", "task", "persona", "created_at", "status", "verdict", "score", "blocked_at",
-               "total_steps", "baseline_source", "cached", "steps", "issues", "transcript", "page_scans", "notes"}
+               "total_steps", "baseline_source", "cached", "error", "steps", "issues", "transcript", "page_scans", "notes"}
 
 
 async def main(api: str, url: str, task: str, persona: str) -> int:

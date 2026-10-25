@@ -7,7 +7,9 @@ from backend.axe_scan import AxeError, axe_scan
 from backend.issues import (IssueLog, axe_issue, drop_named_duplicates, name_of, sort_issues,
                             stop_findings, walker_issue)
 from backend.scoring import BLOCKED, score_audit
-from backend.tinyfish_agent import normalize_result, run_baseline
+import httpx
+
+from backend.tinyfish_agent import AgentFailed, normalize_result, run_baseline
 from backend.tinyfish_browser import close_page, open_page
 from backend.tinyfish_fetch import accessibility_statement
 from backend.walker import Screenshots, activate, reach
@@ -63,8 +65,30 @@ def planned_baseline(audit: dict, use_override: bool, override: dict | None):
     return cached, "agent", True
 
 
+def friendly_error(e: Exception) -> str:
+    """A plain-English reason for an exception, for the UI and the report."""
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        if status in (401, 403):
+            return "TinyFish rejected the API key. Check TINYFISH_API_KEY in .env."
+        if status == 402:
+            return "TinyFish says the account is out of credits."
+        if status == 429:
+            return "TinyFish is rate-limiting requests. Wait a minute and try again."
+        return f"TinyFish returned an error ({status})."
+    if isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
+        return "Couldn't reach TinyFish. Check the internet connection."
+    return str(e) or type(e).__name__
+
+
+NO_BASELINE = ("The sighted agent didn't report finishing the task, so there's nothing to compare against. "
+               "Check that the task can be done without logging in or paying.")
+
+
 async def run_agent(audit: dict, emit, override: dict | None):
-    """The live Agent baseline, with the hand-checked fallback. Returns (baseline or None, source)."""
+    """The live Agent baseline, with a stealth retry and the hand-checked fallback.
+
+    Returns (baseline or None, source, reason): `reason` explains a missing baseline."""
 
     async def on_event(e):
         if e.get("type") == "STREAMING_URL":
@@ -72,16 +96,31 @@ async def run_agent(audit: dict, emit, override: dict | None):
         elif e.get("type") == "PROGRESS":
             await emit("baseline_progress", {"text": e.get("purpose", "")})
 
+    baseline, reason = None, None
     try:
         baseline = await run_baseline(audit["url"], audit["task"], on_event)
+    except AgentFailed as e:
+        if e.code == "SITE_BLOCKED":
+            log.info("the site blocked the agent; retrying once with the stealth browser")
+            await emit("baseline_progress", {"text": "The site blocked the agent. Retrying once with "
+                                                     "TinyFish's stealth browser."})
+            try:
+                baseline = await run_baseline(audit["url"], audit["task"], on_event, profile="stealth")
+            except AgentFailed:
+                reason = ("The site blocked TinyFish's agent, even with its stealth browser, "
+                          "so there's nothing to compare against.")
+            except Exception as e2:
+                reason = friendly_error(e2)
+        else:
+            reason = f"The sighted agent couldn't complete the task ({e}), so there's nothing to compare against."
     except Exception as e:
-        log.warning("agent baseline failed: %s", e)
-        baseline = None
+        reason = friendly_error(e)
     if baseline is None:
-        log.info("agent baseline unusable%s", "; using the hand-checked steps" if override else "")
+        reason = reason or NO_BASELINE
+        log.warning("agent baseline unusable: %s%s", reason, "; using the hand-checked steps" if override else "")
     if override and (baseline is None or os.getenv("FORCE_BASELINE_OVERRIDE", "0") == "1"):
-        return override, "override"
-    return baseline, "agent"
+        return override, "override", None
+    return baseline, "agent", reason
 
 
 async def walk(audit: dict, steps: list[dict], emit, report: dict, issues: IssueLog) -> list[dict]:
@@ -160,8 +199,8 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
     """audit: id, url, task, persona, created_at. emit: async (type, data). Returns the report JSON."""
     report = {**{k: audit[k] for k in ("id", "url", "task", "persona", "created_at")},
               "status": "running", "verdict": None, "score": None, "blocked_at": None, "total_steps": 0,
-              "baseline_source": None, "cached": False, "steps": [], "issues": [], "transcript": [],
-              "page_scans": [], "notes": []}
+              "baseline_source": None, "cached": False, "error": None, "steps": [], "issues": [],
+              "transcript": [], "page_scans": [], "notes": []}
     issues = IssueLog()
     note_task = None
     try:
@@ -179,10 +218,11 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
             await emit("note", note)
         note_task = asyncio.create_task(statement_note())
 
+        reason = None
         if plan:
             baseline, source, cached = plan
         else:
-            (baseline, source), cached = await run_agent(audit, emit, override), False
+            (baseline, source, reason), cached = await run_agent(audit, emit, override), False
         report.update(baseline_source=source, cached=cached)
         steps = baseline["steps"] if baseline else []
         report["total_steps"] = len(steps)
@@ -190,9 +230,16 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
         if baseline:
             await emit("baseline_done", {"steps": steps, "source": source, "cached": cached})
             results = await walk(audit, steps, emit, report, issues)
-            followed = results and all(r["status"] != "baseline_mismatch" for r in results)
-            if source == "agent" and not cached and followed:   # only baselines the walker could follow
+            mismatch = next((r for r in results if r["status"] == "baseline_mismatch"), None)
+            if mismatch:
+                reason = (f"The keyboard walker couldn't find “{steps[mismatch['index']]['element_text']}” on the "
+                          "page. The sighted agent may have recorded the wrong label, so this audit is "
+                          "Inconclusive rather than a failure of the site.")
+            elif source == "agent" and not cached and results:   # only baselines the walker could follow
                 save_cached(audit["url"], audit["task"], baseline)
+        if reason:
+            report["error"] = reason
+            await emit("error", {"message": reason})
         await note_task
         outcome = score_audit(steps, results, issues.items, baseline_ok=bool(baseline))
         report.update(outcome, status="done", issues=sort_issues(issues.items))
@@ -201,9 +248,10 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
         log.exception("audit %s failed", audit["id"])
         if note_task:
             note_task.cancel()
-        await emit("error", {"message": str(e) or type(e).__name__})
+        message = f"The audit stopped: {friendly_error(e)}"
+        await emit("error", {"message": message})
         outcome = {"verdict": "Inconclusive", "score": None, "blocked_at": None,
                    "total_steps": report["total_steps"]}
-        report.update(outcome, status="error", issues=sort_issues(issues.items))
+        report.update(outcome, status="error", error=message, issues=sort_issues(issues.items))
         await emit("done", outcome)
     return report

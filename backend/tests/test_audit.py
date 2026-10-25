@@ -120,3 +120,66 @@ async def test_broken_copy_is_blocked_at_the_trap(monkeypatch, tmp_path):
     assert "axe:button-name" not in found                     # the walker's no_name covers it
     trap = next(i for i in report["issues"] if i["check"] == "kb_trap")
     assert (tmp_path / "screens" / "t1" / Path(trap["screenshot"]).name).exists()
+
+
+def failing_agent(*codes, steps=AGENT_STEPS):
+    """A fake Agent that fails with each code in turn (per call), then succeeds; records the profiles used."""
+    async def agent(url, task, on_event, profile="lite"):
+        agent.profiles.append(profile)
+        if len(agent.profiles) <= len(codes):
+            code = codes[len(agent.profiles) - 1]
+            if isinstance(code, Exception):
+                raise code
+            raise audit.AgentFailed(code, f"{code.lower()} on this site")
+        return {"task_completed": True, "steps": steps}
+    agent.profiles = []
+    return agent
+
+
+async def test_blocked_site_is_retried_once_with_the_stealth_browser(monkeypatch, tmp_path):
+    monkeypatch.setenv("CACHE_BASELINES", "0")
+    agent = failing_agent("SITE_BLOCKED")
+    report, events = await run("fixed", monkeypatch, tmp_path, agent)
+    assert agent.profiles == ["lite", "stealth"]
+    assert (report["verdict"], report["error"]) == ("Completed", None)
+    assert any("stealth" in d.get("text", "") for t, d in events if t == "baseline_progress")
+
+
+async def test_still_blocked_after_the_retry_explains_why(monkeypatch, tmp_path):
+    monkeypatch.setenv("CACHE_BASELINES", "0")
+    agent = failing_agent("SITE_BLOCKED", "SITE_BLOCKED")
+    report, events = await run("fixed", monkeypatch, tmp_path, agent)
+    assert agent.profiles == ["lite", "stealth"]
+    assert report["verdict"] == "Inconclusive" and "blocked" in report["error"]
+    assert data(events, "error")["message"] == report["error"]
+    assert "baseline_done" not in [t for t, _ in events]
+
+
+async def test_other_agent_failures_are_not_retried_and_are_explained(monkeypatch, tmp_path):
+    monkeypatch.setenv("CACHE_BASELINES", "0")
+    agent = failing_agent("MAX_STEPS_EXCEEDED")
+    report, _ = await run("fixed", monkeypatch, tmp_path, agent)
+    assert agent.profiles == ["lite"]
+    assert report["status"] == "done" and report["verdict"] == "Inconclusive"
+    assert "max_steps_exceeded on this site" in report["error"]
+
+
+async def test_an_api_key_problem_gets_a_plain_message(monkeypatch, tmp_path):
+    import httpx
+    monkeypatch.setenv("CACHE_BASELINES", "0")
+    request = httpx.Request("POST", "https://agent.tinyfish.ai/v1/automation/run-sse")
+    denied = httpx.HTTPStatusError("401", request=request, response=httpx.Response(401, request=request))
+    report, _ = await run("fixed", monkeypatch, tmp_path, failing_agent(denied))
+    assert report["error"] == "TinyFish rejected the API key. Check TINYFISH_API_KEY in .env."
+
+
+async def test_a_label_mismatch_is_explained(monkeypatch, tmp_path):
+    monkeypatch.setenv("CACHE_BASELINES", "0")
+    agent = counting([{"action": "click", "element_text": "Book a holiday"}])
+    report, _ = await run("fixed", monkeypatch, tmp_path, agent)
+    assert report["verdict"] == "Inconclusive" and "“Book a holiday”" in report["error"]
+
+
+async def test_a_clean_run_has_no_error(monkeypatch, tmp_path):
+    report, _ = await run("fixed", monkeypatch, tmp_path)
+    assert report["error"] is None

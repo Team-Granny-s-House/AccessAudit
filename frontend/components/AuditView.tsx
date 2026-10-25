@@ -28,11 +28,12 @@ interface Live {
   screenshot: string | null;
   announcement: string;
   barriers: number;
+  error: string | null;
 }
 
 const initialLive: Live = {
   cached: false, streamingUrl: null, steps: [], statuses: {}, log: [], walking: false,
-  screenshot: null, announcement: "", barriers: 0,
+  screenshot: null, announcement: "", barriers: 0, error: null,
 };
 
 function line(state: Live, kind: LogLine["kind"], text: string): LogLine[] {
@@ -100,7 +101,7 @@ function reduce(state: Live, event: AuditEvent): Live {
         log: line(state, "info", d.found ? "The site links an accessibility statement." : "No accessibility statement link found."),
       };
     case "error":
-      return { ...state, log: line(state, "error", `Error: ${d.message}`) };
+      return { ...state, error: d.message, log: line(state, "error", d.message) };
     case "done":
       return {
         ...state,
@@ -232,6 +233,11 @@ export default function AuditView({ id, replay, print }: { id: string; replay: b
               </button>
             )}
           </div>
+          {live.error && (
+            <p role="alert" className="rounded-lg border-2 border-slate-400 bg-slate-50 px-4 py-3 font-bold text-navy">
+              {live.error}
+            </p>
+          )}
           <p className="text-ink-soft">
             {live.walking
               ? `Keyboard walker: ${passed} of ${live.steps.length} steps passed, ${live.barriers} barrier(s) so far.`
@@ -242,7 +248,13 @@ export default function AuditView({ id, replay, print }: { id: string; replay: b
               <h2 id="view-title" className="mb-2 text-lg font-bold text-navy">
                 {live.walking ? "Keyboard walker" : "Sighted agent"}
               </h2>
-              <StreamPanel streamingUrl={live.streamingUrl} cached={live.cached} walking={live.walking} screenshot={live.screenshot} />
+              <StreamPanel
+                streamingUrl={live.streamingUrl}
+                cached={live.cached}
+                walking={live.walking}
+                screenshot={live.screenshot}
+                replay={replay}
+              />
             </section>
             <div className="space-y-6">
               <section aria-labelledby="timeline-title">

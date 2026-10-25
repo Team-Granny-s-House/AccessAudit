@@ -4,6 +4,7 @@ from playwright.async_api import async_playwright
 
 log = logging.getLogger("accessaudit")
 BROWSER_API = "https://api.browser.tinyfish.ai"
+OPEN_SESSIONS: set[str] = set()                     # created but not yet deleted (ended on server shutdown)
 HEADERS = {"X-API-Key": os.environ.get("TINYFISH_API_KEY", "")}
 
 async def create_session(url: str) -> dict:
@@ -18,6 +19,7 @@ async def create_session(url: str) -> dict:
                 continue
             r.raise_for_status()
             session = r.json()                  # session_id, cdp_url, base_url
+            OPEN_SESSIONS.add(session["session_id"])
             log.info("browser session %s created", session["session_id"])
             return session
     raise RuntimeError("TinyFish Browser API rate-limited three times")
@@ -25,7 +27,17 @@ async def create_session(url: str) -> dict:
 async def end_session(session_id: str) -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.delete(f"{BROWSER_API}/{session_id}", headers=HEADERS)
+    if r.status_code == 204:
+        OPEN_SESSIONS.discard(session_id)
     log.info("browser session %s DELETE -> %s", session_id, r.status_code)
+
+async def end_open_sessions() -> None:
+    """Deletes any session an interrupted audit left open (called when the server shuts down)."""
+    for session_id in list(OPEN_SESSIONS):
+        try:
+            await end_session(session_id)
+        except Exception as e:
+            log.warning("couldn't end browser session %s: %s", session_id, e)
 
 async def open_page(url: str):
     """Returns (pw, browser, page, session_id). session_id is None in local mode."""

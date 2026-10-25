@@ -52,6 +52,15 @@ export default function Report({
         </div>
       </header>
 
+      {report.error && (
+        <div role="alert" className="rounded-xl border-2 border-slate-400 bg-slate-50 p-4">
+          <h2 className="font-bold text-navy">
+            {report.status === "error" ? "The audit stopped" : "Why this audit is inconclusive"}
+          </h2>
+          <p>{report.error}</p>
+        </div>
+      )}
+
       {!print && (
         <div className="no-print flex flex-wrap gap-3">
           <a

@@ -12,11 +12,13 @@ export function StreamPanel({
   cached,
   walking,
   screenshot,
+  replay = false,
 }: {
   streamingUrl: string | null;
   cached: boolean;
   walking: boolean;
   screenshot: string | null;
+  replay?: boolean;
 }) {
   const shot = fileUrl(screenshot);
   let body: React.ReactNode;
@@ -27,6 +29,8 @@ export function StreamPanel({
     body = <Notice>The keyboard walker is running in a TinyFish cloud browser. Screenshots appear here at each barrier.</Notice>;
   } else if (cached) {
     body = <Notice>Using a saved baseline — no live stream for this run</Notice>;
+  } else if (replay) {                               // the original stream has ended, and replays work offline
+    body = <Notice>Replay: the sighted agent&apos;s live stream isn&apos;t saved. Its steps appear in the log.</Notice>;
   } else if (streamingUrl) {
     body = (
       <iframe

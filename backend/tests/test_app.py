@@ -19,7 +19,7 @@ STEPS = [
     {"action": "type", "element_text": "Passenger name", "value": "Asha Verma", "description": "Enter the name"},
 ]
 REPORT_KEYS = {"id", "url", "task", "persona", "created_at", "status", "verdict", "score", "blocked_at",
-               "total_steps", "baseline_source", "cached", "steps", "issues", "transcript", "page_scans", "notes"}
+               "total_steps", "baseline_source", "cached", "error", "steps", "issues", "transcript", "page_scans", "notes"}
 
 
 @pytest.fixture

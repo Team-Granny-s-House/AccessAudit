@@ -1,0 +1,548 @@
+diff --git a/DEMO.md b/DEMO.md
+new file mode 100644
+index 0000000..058f2ca
+--- /dev/null
++++ b/DEMO.md
+@@ -0,0 +1,14 @@
++# Demo runs
++
++Golden runs: one good, saved audit per demo target. Each one replays with its original timing at `/audit/{id}?replay=1`, with no network and no TinyFish credits, so it's the fallback if the venue Wi-Fi or a live run fails.
++
++The audit IDs live in the demo laptop's local database (`data/`, not in git), so these links work on that laptop only. Start the backend and frontend first (see the README), then open the links.
++
++| Target | Task | Audit ID | Result | Replay |
++| --- | --- | --- | --- | --- |
++| SkyRail (broken) | Find trains, select the first train, and enter the passenger name Asha Verma. | `7d658639` | Blocked at step 5 of 6, score 20 (live Agent stream + TinyFish walker) | http://localhost:3000/audit/7d658639?replay=1 |
++| SkyRail (fixed) | Find trains, select the first train, and enter the passenger name Asha Verma. | to be recorded | | |
++| Real site 1 | to be chosen | to be recorded | | |
++| Real site 2 | to be chosen | to be recorded | | |
++
++Reports (no replay): http://localhost:3000/audit/{id}
+diff --git a/README.md b/README.md
+index 38296bf..08e38b5 100644
+--- a/README.md
++++ b/README.md
+@@ -15,7 +15,7 @@ AccessAudit is being built in stages; this section is updated as each one lands.
+ | 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ✅ Done |
+ | 3. API | Backend server, stored reports, live events, replays | ✅ Done |
+ | 4. Web app | Audit form, live view, report, PDF | ✅ Done |
+-| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ Next |
++| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ In progress: stealth retry, clear error reasons and offline-safe replays done; waiting for the two real sites |
+ | 6. Extras | AI code fixes or a leaderboard | Not started |
+ 
+ ## How an audit works
+diff --git a/backend/app.py b/backend/app.py
+index 14e2bf8..cf48c9e 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -14,6 +14,7 @@ from pydantic import BaseModel
+ 
+ from backend import store
+ from backend.audit import run_audit
++from backend.tinyfish_browser import end_open_sessions
+ 
+ log = logging.getLogger("accessaudit")
+ 
+@@ -66,6 +67,10 @@ async def lifespan(app: FastAPI):
+     data_dir().mkdir(parents=True, exist_ok=True)
+     store.init_db()
+     yield
++    for task in list(background):                   # an audit still running when the server stops
++        task.cancel()
++    await asyncio.gather(*background, return_exceptions=True)
++    await end_open_sessions()                       # never leave a TinyFish session running
+ 
+ 
+ app = FastAPI(title="AccessAudit", lifespan=lifespan)
+diff --git a/backend/audit.py b/backend/audit.py
+index 87abe43..386d3e5 100644
+--- a/backend/audit.py
++++ b/backend/audit.py
+@@ -7,7 +7,9 @@ from backend.axe_scan import AxeError, axe_scan
+ from backend.issues import (IssueLog, axe_issue, drop_named_duplicates, name_of, sort_issues,
+                             stop_findings, walker_issue)
+ from backend.scoring import BLOCKED, score_audit
+-from backend.tinyfish_agent import normalize_result, run_baseline
++import httpx
++
++from backend.tinyfish_agent import AgentFailed, normalize_result, run_baseline
+ from backend.tinyfish_browser import close_page, open_page
+ from backend.tinyfish_fetch import accessibility_statement
+ from backend.walker import Screenshots, activate, reach
+@@ -63,8 +65,30 @@ def planned_baseline(audit: dict, use_override: bool, override: dict | None):
+     return cached, "agent", True
+ 
+ 
++def friendly_error(e: Exception) -> str:
++    """A plain-English reason for an exception, for the UI and the report."""
++    if isinstance(e, httpx.HTTPStatusError):
++        status = e.response.status_code
++        if status in (401, 403):
++            return "TinyFish rejected the API key. Check TINYFISH_API_KEY in .env."
++        if status == 402:
++            return "TinyFish says the account is out of credits."
++        if status == 429:
++            return "TinyFish is rate-limiting requests. Wait a minute and try again."
++        return f"TinyFish returned an error ({status})."
++    if isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
++        return "Couldn't reach TinyFish. Check the internet connection."
++    return str(e) or type(e).__name__
++
++
++NO_BASELINE = ("The sighted agent didn't report finishing the task, so there's nothing to compare against. "
++               "Check that the task can be done without logging in or paying.")
++
++
+ async def run_agent(audit: dict, emit, override: dict | None):
+-    """The live Agent baseline, with the hand-checked fallback. Returns (baseline or None, source)."""
++    """The live Agent baseline, with a stealth retry and the hand-checked fallback.
++
++    Returns (baseline or None, source, reason): `reason` explains a missing baseline."""
+ 
+     async def on_event(e):
+         if e.get("type") == "STREAMING_URL":
+@@ -72,16 +96,31 @@ async def run_agent(audit: dict, emit, override: dict | None):
+         elif e.get("type") == "PROGRESS":
+             await emit("baseline_progress", {"text": e.get("purpose", "")})
+ 
++    baseline, reason = None, None
+     try:
+         baseline = await run_baseline(audit["url"], audit["task"], on_event)
++    except AgentFailed as e:
++        if e.code == "SITE_BLOCKED":
++            log.info("the site blocked the agent; retrying once with the stealth browser")
++            await emit("baseline_progress", {"text": "The site blocked the agent. Retrying once with "
++                                                     "TinyFish's stealth browser."})
++            try:
++                baseline = await run_baseline(audit["url"], audit["task"], on_event, profile="stealth")
++            except AgentFailed:
++                reason = ("The site blocked TinyFish's agent, even with its stealth browser, "
++                          "so there's nothing to compare against.")
++            except Exception as e2:
++                reason = friendly_error(e2)
++        else:
++            reason = f"The sighted agent couldn't complete the task ({e}), so there's nothing to compare against."
+     except Exception as e:
+-        log.warning("agent baseline failed: %s", e)
+-        baseline = None
++        reason = friendly_error(e)
+     if baseline is None:
+-        log.info("agent baseline unusable%s", "; using the hand-checked steps" if override else "")
++        reason = reason or NO_BASELINE
++        log.warning("agent baseline unusable: %s%s", reason, "; using the hand-checked steps" if override else "")
+     if override and (baseline is None or os.getenv("FORCE_BASELINE_OVERRIDE", "0") == "1"):
+-        return override, "override"
+-    return baseline, "agent"
++        return override, "override", None
++    return baseline, "agent", reason
+ 
+ 
+ async def walk(audit: dict, steps: list[dict], emit, report: dict, issues: IssueLog) -> list[dict]:
+@@ -160,8 +199,8 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
+     """audit: id, url, task, persona, created_at. emit: async (type, data). Returns the report JSON."""
+     report = {**{k: audit[k] for k in ("id", "url", "task", "persona", "created_at")},
+               "status": "running", "verdict": None, "score": None, "blocked_at": None, "total_steps": 0,
+-              "baseline_source": None, "cached": False, "steps": [], "issues": [], "transcript": [],
+-              "page_scans": [], "notes": []}
++              "baseline_source": None, "cached": False, "error": None, "steps": [], "issues": [],
++              "transcript": [], "page_scans": [], "notes": []}
+     issues = IssueLog()
+     note_task = None
+     try:
+@@ -179,10 +218,11 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
+             await emit("note", note)
+         note_task = asyncio.create_task(statement_note())
+ 
++        reason = None
+         if plan:
+             baseline, source, cached = plan
+         else:
+-            (baseline, source), cached = await run_agent(audit, emit, override), False
++            (baseline, source, reason), cached = await run_agent(audit, emit, override), False
+         report.update(baseline_source=source, cached=cached)
+         steps = baseline["steps"] if baseline else []
+         report["total_steps"] = len(steps)
+@@ -190,9 +230,16 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
+         if baseline:
+             await emit("baseline_done", {"steps": steps, "source": source, "cached": cached})
+             results = await walk(audit, steps, emit, report, issues)
+-            followed = results and all(r["status"] != "baseline_mismatch" for r in results)
+-            if source == "agent" and not cached and followed:   # only baselines the walker could follow
++            mismatch = next((r for r in results if r["status"] == "baseline_mismatch"), None)
++            if mismatch:
++                reason = (f"The keyboard walker couldn't find “{steps[mismatch['index']]['element_text']}” on the "
++                          "page. The sighted agent may have recorded the wrong label, so this audit is "
++                          "Inconclusive rather than a failure of the site.")
++            elif source == "agent" and not cached and results:   # only baselines the walker could follow
+                 save_cached(audit["url"], audit["task"], baseline)
++        if reason:
++            report["error"] = reason
++            await emit("error", {"message": reason})
+         await note_task
+         outcome = score_audit(steps, results, issues.items, baseline_ok=bool(baseline))
+         report.update(outcome, status="done", issues=sort_issues(issues.items))
+@@ -201,9 +248,10 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
+         log.exception("audit %s failed", audit["id"])
+         if note_task:
+             note_task.cancel()
+-        await emit("error", {"message": str(e) or type(e).__name__})
++        message = f"The audit stopped: {friendly_error(e)}"
++        await emit("error", {"message": message})
+         outcome = {"verdict": "Inconclusive", "score": None, "blocked_at": None,
+                    "total_steps": report["total_steps"]}
+-        report.update(outcome, status="error", issues=sort_issues(issues.items))
++        report.update(outcome, status="error", error=message, issues=sort_issues(issues.items))
+         await emit("done", outcome)
+     return report
+diff --git a/backend/store.py b/backend/store.py
+index 4765d92..5546296 100644
+--- a/backend/store.py
++++ b/backend/store.py
+@@ -122,7 +122,7 @@ def get_report(audit_id: str) -> dict | None:
+             return json.loads(audit.report_json)
+         return {"id": audit.id, "url": audit.url, "task": audit.task, "persona": audit.persona,
+                 "created_at": audit.created_at, "status": audit.status, "verdict": None, "score": None,
+-                "blocked_at": None, "total_steps": 0, "baseline_source": None, "cached": False, "steps": [], "issues": [],
++                "blocked_at": None, "total_steps": 0, "baseline_source": None, "cached": False, "error": None, "steps": [], "issues": [],
+                 "transcript": [], "page_scans": [], "notes": []}
+ 
+ 
+diff --git a/backend/tests/test_agent.py b/backend/tests/test_agent.py
+index 1e9747b..d388468 100644
+--- a/backend/tests/test_agent.py
++++ b/backend/tests/test_agent.py
+@@ -56,3 +56,11 @@ def test_goal_carries_the_field_instructions():
+     goal = baseline_goal("Find trains and enter the name Asha Verma.")
+     assert "Asha Verma. Do not submit" in goal                    # no doubled full stop
+     assert "exact visible text or label" in goal and "description is a short plain-English note" in goal
++
++
++def test_error_codes_are_read_from_the_complete_event():
++    from backend.tinyfish_agent import describe_error
++    assert describe_error({"code": "SITE_BLOCKED", "message": "Access denied"}) == ("SITE_BLOCKED", "Access denied")
++    assert describe_error({"code": "TASK_FAILED", "help_message": "Try again"}) == ("TASK_FAILED", "Try again")
++    assert describe_error("SITE_BLOCKED: captcha")[0] == "SITE_BLOCKED"
++    assert describe_error(None) == ("TASK_FAILED", "the agent couldn't complete the task")
+diff --git a/backend/tests/test_app.py b/backend/tests/test_app.py
+index ca3e853..f440289 100644
+--- a/backend/tests/test_app.py
++++ b/backend/tests/test_app.py
+@@ -19,7 +19,7 @@ STEPS = [
+     {"action": "type", "element_text": "Passenger name", "value": "Asha Verma", "description": "Enter the name"},
+ ]
+ REPORT_KEYS = {"id", "url", "task", "persona", "created_at", "status", "verdict", "score", "blocked_at",
+-               "total_steps", "baseline_source", "cached", "steps", "issues", "transcript", "page_scans", "notes"}
++               "total_steps", "baseline_source", "cached", "error", "steps", "issues", "transcript", "page_scans", "notes"}
+ 
+ 
+ @pytest.fixture
+diff --git a/backend/tests/test_audit.py b/backend/tests/test_audit.py
+index 666f906..f4b1ff8 100644
+--- a/backend/tests/test_audit.py
++++ b/backend/tests/test_audit.py
+@@ -120,3 +120,66 @@ async def test_broken_copy_is_blocked_at_the_trap(monkeypatch, tmp_path):
+     assert "axe:button-name" not in found                     # the walker's no_name covers it
+     trap = next(i for i in report["issues"] if i["check"] == "kb_trap")
+     assert (tmp_path / "screens" / "t1" / Path(trap["screenshot"]).name).exists()
++
++
++def failing_agent(*codes, steps=AGENT_STEPS):
++    """A fake Agent that fails with each code in turn (per call), then succeeds; records the profiles used."""
++    async def agent(url, task, on_event, profile="lite"):
++        agent.profiles.append(profile)
++        if len(agent.profiles) <= len(codes):
++            code = codes[len(agent.profiles) - 1]
++            if isinstance(code, Exception):
++                raise code
++            raise audit.AgentFailed(code, f"{code.lower()} on this site")
++        return {"task_completed": True, "steps": steps}
++    agent.profiles = []
++    return agent
++
++
++async def test_blocked_site_is_retried_once_with_the_stealth_browser(monkeypatch, tmp_path):
++    monkeypatch.setenv("CACHE_BASELINES", "0")
++    agent = failing_agent("SITE_BLOCKED")
++    report, events = await run("fixed", monkeypatch, tmp_path, agent)
++    assert agent.profiles == ["lite", "stealth"]
++    assert (report["verdict"], report["error"]) == ("Completed", None)
++    assert any("stealth" in d.get("text", "") for t, d in events if t == "baseline_progress")
++
++
++async def test_still_blocked_after_the_retry_explains_why(monkeypatch, tmp_path):
++    monkeypatch.setenv("CACHE_BASELINES", "0")
++    agent = failing_agent("SITE_BLOCKED", "SITE_BLOCKED")
++    report, events = await run("fixed", monkeypatch, tmp_path, agent)
++    assert agent.profiles == ["lite", "stealth"]
++    assert report["verdict"] == "Inconclusive" and "blocked" in report["error"]
++    assert data(events, "error")["message"] == report["error"]
++    assert "baseline_done" not in [t for t, _ in events]
++
++
++async def test_other_agent_failures_are_not_retried_and_are_explained(monkeypatch, tmp_path):
++    monkeypatch.setenv("CACHE_BASELINES", "0")
++    agent = failing_agent("MAX_STEPS_EXCEEDED")
++    report, _ = await run("fixed", monkeypatch, tmp_path, agent)
++    assert agent.profiles == ["lite"]
++    assert report["status"] == "done" and report["verdict"] == "Inconclusive"
++    assert "max_steps_exceeded on this site" in report["error"]
++
++
++async def test_an_api_key_problem_gets_a_plain_message(monkeypatch, tmp_path):
++    import httpx
++    monkeypatch.setenv("CACHE_BASELINES", "0")
++    request = httpx.Request("POST", "https://agent.tinyfish.ai/v1/automation/run-sse")
++    denied = httpx.HTTPStatusError("401", request=request, response=httpx.Response(401, request=request))
++    report, _ = await run("fixed", monkeypatch, tmp_path, failing_agent(denied))
++    assert report["error"] == "TinyFish rejected the API key. Check TINYFISH_API_KEY in .env."
++
++
++async def test_a_label_mismatch_is_explained(monkeypatch, tmp_path):
++    monkeypatch.setenv("CACHE_BASELINES", "0")
++    agent = counting([{"action": "click", "element_text": "Book a holiday"}])
++    report, _ = await run("fixed", monkeypatch, tmp_path, agent)
++    assert report["verdict"] == "Inconclusive" and "“Book a holiday”" in report["error"]
++
++
++async def test_a_clean_run_has_no_error(monkeypatch, tmp_path):
++    report, _ = await run("fixed", monkeypatch, tmp_path)
++    assert report["error"] is None
+diff --git a/backend/tests/test_browser.py b/backend/tests/test_browser.py
+new file mode 100644
+index 0000000..b276d26
+--- /dev/null
++++ b/backend/tests/test_browser.py
+@@ -0,0 +1,14 @@
++import backend.tinyfish_browser as tb
++
++
++async def test_sessions_left_open_are_ended_on_shutdown(monkeypatch):
++    ended = []
++
++    async def fake_end(session_id):
++        ended.append(session_id)
++        tb.OPEN_SESSIONS.discard(session_id)
++
++    monkeypatch.setattr(tb, "end_session", fake_end)
++    monkeypatch.setattr(tb, "OPEN_SESSIONS", {"tf-a", "tf-b"})
++    await tb.end_open_sessions()
++    assert sorted(ended) == ["tf-a", "tf-b"] and tb.OPEN_SESSIONS == set()
+diff --git a/backend/tinyfish_agent.py b/backend/tinyfish_agent.py
+index 227ef0c..f04880d 100644
+--- a/backend/tinyfish_agent.py
++++ b/backend/tinyfish_agent.py
+@@ -43,6 +43,27 @@ def baseline_goal(task: str) -> str:
+         "what the step does, for a person reading the report."
+     )
+ 
++class AgentFailed(RuntimeError):
++    """The Agent run ended without COMPLETED; `code` is TinyFish's error code, e.g. SITE_BLOCKED."""
++
++    def __init__(self, code: str, message: str):
++        super().__init__(message)
++        self.code = code
++
++
++def describe_error(error) -> tuple[str, str]:
++    """(code, message) from a COMPLETE event's `error`, which carries code / message / help_message."""
++    code, message = "", ""
++    if isinstance(error, dict):
++        code = str(error.get("code") or "")
++        message = str(error.get("message") or error.get("help_message") or "")
++    elif isinstance(error, str):
++        message = error
++    if "SITE_BLOCKED" in json.dumps(error or ""):
++        code = "SITE_BLOCKED"
++    return code or "TASK_FAILED", message or "the agent couldn't complete the task"
++
++
+ def normalize_result(result):
+     """Returns the baseline dict, or None if the baseline failed (Correction 3)."""
+     if isinstance(result, dict) and "steps" not in result and "result" in result:
+@@ -56,9 +77,10 @@ def normalize_result(result):
+         return None
+     return result
+ 
+-async def run_baseline(url: str, task: str, on_event):
++async def run_baseline(url: str, task: str, on_event, profile: str = "lite"):
++    """The baseline dict, or None if the result is unusable. Raises AgentFailed if the run fails."""
+     payload = {"url": url, "goal": baseline_goal(task),
+-               "output_schema": STEP_SCHEMA, "browser_profile": "lite",
++               "output_schema": STEP_SCHEMA, "browser_profile": profile,
+                "agent_config": {"max_duration_seconds": 240}}
+     async with httpx.AsyncClient(timeout=300) as client:
+         async with client.stream("POST", AGENT_URL, headers=HEADERS, json=payload) as r:
+@@ -72,6 +94,6 @@ async def run_baseline(url: str, task: str, on_event):
+                 await on_event(event)              # forwarded to the frontend as events
+                 if event.get("type") == "COMPLETE":
+                     if event.get("status") != "COMPLETED":
+-                        return None
++                        raise AgentFailed(*describe_error(event.get("error")))
+                     return normalize_result(event.get("result"))   # check result, not just status
+-    return None
++    raise AgentFailed("STREAM_ENDED", "the agent's stream ended before it finished")
+diff --git a/backend/tinyfish_browser.py b/backend/tinyfish_browser.py
+index b96289e..7629276 100644
+--- a/backend/tinyfish_browser.py
++++ b/backend/tinyfish_browser.py
+@@ -4,6 +4,7 @@ from playwright.async_api import async_playwright
+ 
+ log = logging.getLogger("accessaudit")
+ BROWSER_API = "https://api.browser.tinyfish.ai"
++OPEN_SESSIONS: set[str] = set()                     # created but not yet deleted (ended on server shutdown)
+ HEADERS = {"X-API-Key": os.environ.get("TINYFISH_API_KEY", "")}
+ 
+ async def create_session(url: str) -> dict:
+@@ -18,6 +19,7 @@ async def create_session(url: str) -> dict:
+                 continue
+             r.raise_for_status()
+             session = r.json()                  # session_id, cdp_url, base_url
++            OPEN_SESSIONS.add(session["session_id"])
+             log.info("browser session %s created", session["session_id"])
+             return session
+     raise RuntimeError("TinyFish Browser API rate-limited three times")
+@@ -25,8 +27,18 @@ async def create_session(url: str) -> dict:
+ async def end_session(session_id: str) -> None:
+     async with httpx.AsyncClient(timeout=30) as client:
+         r = await client.delete(f"{BROWSER_API}/{session_id}", headers=HEADERS)
++    if r.status_code == 204:
++        OPEN_SESSIONS.discard(session_id)
+     log.info("browser session %s DELETE -> %s", session_id, r.status_code)
+ 
++async def end_open_sessions() -> None:
++    """Deletes any session an interrupted audit left open (called when the server shuts down)."""
++    for session_id in list(OPEN_SESSIONS):
++        try:
++            await end_session(session_id)
++        except Exception as e:
++            log.warning("couldn't end browser session %s: %s", session_id, e)
++
+ async def open_page(url: str):
+     """Returns (pw, browser, page, session_id). session_id is None in local mode."""
+     pw = await async_playwright().start()
+diff --git a/backend/ws_client.py b/backend/ws_client.py
+index 3172568..039db4e 100644
+--- a/backend/ws_client.py
++++ b/backend/ws_client.py
+@@ -8,7 +8,7 @@ import httpx
+ import websockets
+ 
+ REPORT_KEYS = {"id", "url", "task", "persona", "created_at", "status", "verdict", "score", "blocked_at",
+-               "total_steps", "baseline_source", "cached", "steps", "issues", "transcript", "page_scans", "notes"}
++               "total_steps", "baseline_source", "cached", "error", "steps", "issues", "transcript", "page_scans", "notes"}
+ 
+ 
+ async def main(api: str, url: str, task: str, persona: str) -> int:
+diff --git a/frontend/components/AuditView.tsx b/frontend/components/AuditView.tsx
+index 6d56b26..87a454e 100644
+--- a/frontend/components/AuditView.tsx
++++ b/frontend/components/AuditView.tsx
+@@ -28,11 +28,12 @@ interface Live {
+   screenshot: string | null;
+   announcement: string;
+   barriers: number;
++  error: string | null;
+ }
+ 
+ const initialLive: Live = {
+   cached: false, streamingUrl: null, steps: [], statuses: {}, log: [], walking: false,
+-  screenshot: null, announcement: "", barriers: 0,
++  screenshot: null, announcement: "", barriers: 0, error: null,
+ };
+ 
+ function line(state: Live, kind: LogLine["kind"], text: string): LogLine[] {
+@@ -100,7 +101,7 @@ function reduce(state: Live, event: AuditEvent): Live {
+         log: line(state, "info", d.found ? "The site links an accessibility statement." : "No accessibility statement link found."),
+       };
+     case "error":
+-      return { ...state, log: line(state, "error", `Error: ${d.message}`) };
++      return { ...state, error: d.message, log: line(state, "error", d.message) };
+     case "done":
+       return {
+         ...state,
+@@ -232,6 +233,11 @@ export default function AuditView({ id, replay, print }: { id: string; replay: b
+               </button>
+             )}
+           </div>
++          {live.error && (
++            <p role="alert" className="rounded-lg border-2 border-slate-400 bg-slate-50 px-4 py-3 font-bold text-navy">
++              {live.error}
++            </p>
++          )}
+           <p className="text-ink-soft">
+             {live.walking
+               ? `Keyboard walker: ${passed} of ${live.steps.length} steps passed, ${live.barriers} barrier(s) so far.`
+@@ -242,7 +248,13 @@ export default function AuditView({ id, replay, print }: { id: string; replay: b
+               <h2 id="view-title" className="mb-2 text-lg font-bold text-navy">
+                 {live.walking ? "Keyboard walker" : "Sighted agent"}
+               </h2>
+-              <StreamPanel streamingUrl={live.streamingUrl} cached={live.cached} walking={live.walking} screenshot={live.screenshot} />
++              <StreamPanel
++                streamingUrl={live.streamingUrl}
++                cached={live.cached}
++                walking={live.walking}
++                screenshot={live.screenshot}
++                replay={replay}
++              />
+             </section>
+             <div className="space-y-6">
+               <section aria-labelledby="timeline-title">
+diff --git a/frontend/components/LivePanel.tsx b/frontend/components/LivePanel.tsx
+index be156da..a69dfca 100644
+--- a/frontend/components/LivePanel.tsx
++++ b/frontend/components/LivePanel.tsx
+@@ -12,11 +12,13 @@ export function StreamPanel({
+   cached,
+   walking,
+   screenshot,
++  replay = false,
+ }: {
+   streamingUrl: string | null;
+   cached: boolean;
+   walking: boolean;
+   screenshot: string | null;
++  replay?: boolean;
+ }) {
+   const shot = fileUrl(screenshot);
+   let body: React.ReactNode;
+@@ -27,6 +29,8 @@ export function StreamPanel({
+     body = <Notice>The keyboard walker is running in a TinyFish cloud browser. Screenshots appear here at each barrier.</Notice>;
+   } else if (cached) {
+     body = <Notice>Using a saved baseline — no live stream for this run</Notice>;
++  } else if (replay) {                               // the original stream has ended, and replays work offline
++    body = <Notice>Replay: the sighted agent&apos;s live stream isn&apos;t saved. Its steps appear in the log.</Notice>;
+   } else if (streamingUrl) {
+     body = (
+       <iframe
+diff --git a/frontend/components/Report.tsx b/frontend/components/Report.tsx
+index de42bd8..ec2dce0 100644
+--- a/frontend/components/Report.tsx
++++ b/frontend/components/Report.tsx
+@@ -52,6 +52,15 @@ export default function Report({
+         </div>
+       </header>
+ 
++      {report.error && (
++        <div role="alert" className="rounded-xl border-2 border-slate-400 bg-slate-50 p-4">
++          <h2 className="font-bold text-navy">
++            {report.status === "error" ? "The audit stopped" : "Why this audit is inconclusive"}
++          </h2>
++          <p>{report.error}</p>
++        </div>
++      )}
++
+       {!print && (
+         <div className="no-print flex flex-wrap gap-3">
+           <a
+diff --git a/frontend/lib/api.ts b/frontend/lib/api.ts
+index d63cddd..88c0c47 100644
+--- a/frontend/lib/api.ts
++++ b/frontend/lib/api.ts
+@@ -85,6 +85,7 @@ export interface Report {
+   total_steps: number;
+   baseline_source: "agent" | "override" | null;
+   cached: boolean;
++  error: string | null; // why the audit is Inconclusive or stopped, in plain English
+   steps: StepResult[];
+   issues: Issue[];
+   transcript: Stop[];

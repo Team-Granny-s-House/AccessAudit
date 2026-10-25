@@ -85,6 +85,7 @@ export interface Report {
   total_steps: number;
   baseline_source: "agent" | "override" | null;
   cached: boolean;
+  error: string | null; // why the audit is Inconclusive or stopped, in plain English
   steps: StepResult[];
   issues: Issue[];
   transcript: Stop[];

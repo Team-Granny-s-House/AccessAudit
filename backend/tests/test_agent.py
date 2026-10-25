@@ -56,3 +56,11 @@ def test_goal_carries_the_field_instructions():
     goal = baseline_goal("Find trains and enter the name Asha Verma.")
     assert "Asha Verma. Do not submit" in goal                    # no doubled full stop
     assert "exact visible text or label" in goal and "description is a short plain-English note" in goal
+
+
+def test_error_codes_are_read_from_the_complete_event():
+    from backend.tinyfish_agent import describe_error
+    assert describe_error({"code": "SITE_BLOCKED", "message": "Access denied"}) == ("SITE_BLOCKED", "Access denied")
+    assert describe_error({"code": "TASK_FAILED", "help_message": "Try again"}) == ("TASK_FAILED", "Try again")
+    assert describe_error("SITE_BLOCKED: captcha")[0] == "SITE_BLOCKED"
+    assert describe_error(None) == ("TASK_FAILED", "the agent couldn't complete the task")

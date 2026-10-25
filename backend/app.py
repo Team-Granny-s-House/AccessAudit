@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from backend import store
 from backend.audit import run_audit
+from backend.tinyfish_browser import end_open_sessions
 
 log = logging.getLogger("accessaudit")
 
@@ -66,6 +67,10 @@ async def lifespan(app: FastAPI):
     data_dir().mkdir(parents=True, exist_ok=True)
     store.init_db()
     yield
+    for task in list(background):                   # an audit still running when the server stops
+        task.cancel()
+    await asyncio.gather(*background, return_exceptions=True)
+    await end_open_sessions()                       # never leave a TinyFish session running
 
 
 app = FastAPI(title="AccessAudit", lifespan=lifespan)

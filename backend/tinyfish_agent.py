@@ -43,6 +43,27 @@ def baseline_goal(task: str) -> str:
         "what the step does, for a person reading the report."
     )
 
+class AgentFailed(RuntimeError):
+    """The Agent run ended without COMPLETED; `code` is TinyFish's error code, e.g. SITE_BLOCKED."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def describe_error(error) -> tuple[str, str]:
+    """(code, message) from a COMPLETE event's `error`, which carries code / message / help_message."""
+    code, message = "", ""
+    if isinstance(error, dict):
+        code = str(error.get("code") or "")
+        message = str(error.get("message") or error.get("help_message") or "")
+    elif isinstance(error, str):
+        message = error
+    if "SITE_BLOCKED" in json.dumps(error or ""):
+        code = "SITE_BLOCKED"
+    return code or "TASK_FAILED", message or "the agent couldn't complete the task"
+
+
 def normalize_result(result):
     """Returns the baseline dict, or None if the baseline failed (Correction 3)."""
     if isinstance(result, dict) and "steps" not in result and "result" in result:
@@ -56,9 +77,10 @@ def normalize_result(result):
         return None
     return result
 
-async def run_baseline(url: str, task: str, on_event):
+async def run_baseline(url: str, task: str, on_event, profile: str = "lite"):
+    """The baseline dict, or None if the result is unusable. Raises AgentFailed if the run fails."""
     payload = {"url": url, "goal": baseline_goal(task),
-               "output_schema": STEP_SCHEMA, "browser_profile": "lite",
+               "output_schema": STEP_SCHEMA, "browser_profile": profile,
                "agent_config": {"max_duration_seconds": 240}}
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream("POST", AGENT_URL, headers=HEADERS, json=payload) as r:
@@ -72,6 +94,6 @@ async def run_baseline(url: str, task: str, on_event):
                 await on_event(event)              # forwarded to the frontend as events
                 if event.get("type") == "COMPLETE":
                     if event.get("status") != "COMPLETED":
-                        return None
+                        raise AgentFailed(*describe_error(event.get("error")))
                     return normalize_result(event.get("result"))   # check result, not just status
-    return None
+    raise AgentFailed("STREAM_ENDED", "the agent's stream ended before it finished")
