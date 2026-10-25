@@ -15,12 +15,24 @@ FOCUS_JS = """() => {
     page_x: Math.round(r.left + window.scrollX),
     page_y: Math.round(r.top + window.scrollY),
     html: el.outerHTML.slice(0, 300),
+    path: (() => {                         // DOM path: tells apart links with the same text and position
+      const parts = [];
+      for (let n = el; n && n.nodeType === 1 && n !== document.documentElement; n = n.parentElement) {
+        let i = 1;
+        for (let s = n.previousElementSibling; s; s = s.previousElementSibling) i++;
+        parts.unshift(n.tagName.toLowerCase() + ':' + i);
+      }
+      return parts.join('>');
+    })(),
     focus_ring: (s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== 'none'
   };
 }"""
 
-MAX_TABS = 120
+MAX_TABS = 120              # at least this many presses...
+MAX_TABS_CEILING = 400      # ...or the page's focusable-element count plus a margin, up to this ceiling
 MATCH_SCORE = 85
+PARTIAL_MIN_LEN = 12        # partial (substring) matches only for labels this long: "Fees" must not match "Fee Portal"
+COVERAGE = 0.6              # an element's text must cover this much of a longer label to match it
 STOP_WORDS = ("pay", "submit", "confirm", "place order", "book now")
 TEXT_TYPES = ("text", "search", "email", "tel", "number", "textarea")
 PASSED = ("activated", "typed", "stopped_safely")
@@ -32,16 +44,35 @@ def announcement(snapshot: str) -> str:
     return first.rstrip(":").rstrip()
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip().lower()
+
+
+def similar(target: str, text: str) -> bool:
+    """Whole-label similarity, plus two kinds of substring match:
+    the element's text contains a long label (a card link with extra text), or the label is the element's
+    text plus a little (the agent added a word). A single word of a long label never matches."""
+    target, text = _norm(target), _norm(text)
+    if not target or not text:
+        return False
+    if target == text or fuzz.ratio(target, text) >= MATCH_SCORE:
+        return True
+    if fuzz.partial_ratio(target, text) < 90:
+        return False
+    if len(text) >= len(target):
+        return len(target) >= PARTIAL_MIN_LEN
+    return len(text) >= COVERAGE * len(target)
+
+
 def matches(target_text: str, info: dict) -> bool:
-    """Fuzzy match against the visible text and the announced name (a checkbox's text is just its value)."""
-    target = target_text.lower()
+    """Match against the visible text and the announced name (a checkbox's text is just its value)."""
     named = re.match(r'^- \w+ "(.*)"', info["announce"] or "")
-    return max(fuzz.partial_ratio(target, (info["text"] or "").lower()),
-               fuzz.partial_ratio(target, named.group(1).lower() if named else "")) >= MATCH_SCORE
+    return similar(target_text, info["text"]) or bool(named and similar(target_text, named.group(1)))
 
 
 def signature(info: dict) -> tuple:
-    return (info["tag"], info["text"], info["page_x"], info["page_y"])
+    """Which element has focus: its DOM path (falls back to tag, text and position)."""
+    return (info.get("path"),) if info.get("path") else (info["tag"], info["text"], info["page_x"], info["page_y"])
 
 
 async def focus_stop(page):
@@ -60,10 +91,25 @@ async def target_exists(page, target_text: str) -> bool:
             or await page.get_by_label(target_text).count() > 0)
 
 
+FOCUSABLE_COUNT_JS = """() => Array.from(
+  document.querySelectorAll('a[href], button, input, select, textarea, summary, iframe, [tabindex]')
+).filter(e => e.tabIndex >= 0 && !e.disabled).length"""
+
+
+async def tab_limit(page) -> int:
+    """At least MAX_TABS presses; on big pages one per focusable element plus a margin, up to the ceiling."""
+    try:
+        count = await page.evaluate(FOCUSABLE_COUNT_JS)
+    except Exception:
+        return MAX_TABS
+    return max(MAX_TABS, min(MAX_TABS_CEILING, count + 10))
+
+
 async def reach(page, target_text, transcript, on_stop):
     """Tabs until the target has focus. Returns status found, unreachable, trap or baseline_mismatch."""
     seen, gap = [], False
-    for presses in range(1, MAX_TABS + 1):
+    limit = await tab_limit(page)
+    for presses in range(1, limit + 1):
         await page.keyboard.press("Tab")
         info = await focus_stop(page)
         if not info:
@@ -85,7 +131,7 @@ async def reach(page, target_text, transcript, on_stop):
         if len(seen) >= 12 and len(set(seen[-12:])) <= 3:
             return {"status": "trap", "loop": list(set(seen[-12:])), "presses": presses}
     else:
-        presses = MAX_TABS
+        presses = limit
     if not await target_exists(page, target_text):
         return {"status": "baseline_mismatch", "presses": presses}   # the baseline was wrong, not the site
     return {"status": "unreachable", "presses": presses}

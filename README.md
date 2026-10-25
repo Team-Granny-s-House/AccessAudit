@@ -15,7 +15,7 @@ AccessAudit is being built in stages; this section is updated as each one lands.
 | 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ✅ Done |
 | 3. API | Backend server, stored reports, live events, replays | ✅ Done |
 | 4. Web app | Audit form, live view, report, PDF | ✅ Done |
-| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ In progress: stealth retry, clear error reasons and offline-safe replays done; waiting for the two real sites |
+| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ In progress: stealth retry, clear error reasons, offline-safe replays and real-site tuning done; SkyRail golden runs recorded in `DEMO.md`; real-site golden runs next |
 | 6. Extras | AI code fixes or a leaderboard | Not started |
 
 ## How an audit works
@@ -169,7 +169,16 @@ To redeploy after changing the site, run `npx vercel@latest --prod` from `demo-s
 
 ## Replays
 
-Every audit's events are saved, so any finished audit can be replayed with its original timing at `/audit/{id}?replay=1`. A replay needs no network or TinyFish credits.
+Every audit's events are saved, so any finished audit can be replayed with its original timing at `/audit/{id}?replay=1`. A replay needs no network or TinyFish credits. The recorded demo runs are listed in [DEMO.md](DEMO.md).
+
+## Tested on real sites
+
+Early checks on public Indian government and college sites shaped the walker:
+
+- A scrolling news ticker of identical "Click here" links is not mistaken for a keyboard trap: each element is identified by its place in the page, not its text.
+- A short label like "Fees" doesn't match a longer link like "Fee Portal", and one word of a long label doesn't match a short link.
+- Big pages (hundreds of links) get more Tab presses, up to 400, so a link far down the page isn't reported as unreachable.
+- If a site blocks the agent, it retries once with TinyFish's stealth browser; if the audit still can't run, the report says why in plain English.
 
 ## Project layout
 

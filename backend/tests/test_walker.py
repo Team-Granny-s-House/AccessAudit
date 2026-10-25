@@ -100,3 +100,42 @@ async def test_never_presses_a_submit_control(open_fixture):
     page = await open_fixture("form.html")
     hit, _ = await walk_to(page, "Submit order")
     assert (await activate(page, {"action": "click"}, hit["element"]))["status"] == "stopped_safely"
+
+
+async def test_same_text_links_in_a_ticker_are_not_a_trap(open_fixture):
+    page = await open_fixture("ticker.html")
+    hit, stops = await walk_to(page, "Apply now")
+    assert hit["status"] == "found"
+    assert sum(s["text"] == "Click here" for s in stops) == 13
+
+
+async def test_a_short_label_does_not_match_a_longer_link(open_fixture):
+    page = await open_fixture("ticker.html")
+    hit, _ = await walk_to(page, "Fees")
+    assert hit["status"] == "found" and hit["element"]["text"] == "Fees"      # not "Fee Portal"
+
+
+def test_label_similarity():
+    from backend.walker import similar
+    assert similar("Find trains", "Find trains") and similar("find  Trains", "Find trains")
+    assert similar("Find trains button", "Find trains")          # long label with an extra word
+    assert similar("Passenger name", "Passenger Name")
+    assert not similar("Fees", "Fee Portal")
+    assert not similar("Admission", "International Admission")
+    assert not similar("Select", "") and not similar("", "Select")
+
+
+def test_one_word_of_a_long_label_does_not_match():
+    from backend.walker import similar
+    assert not similar("B.Tech. Lateral Entry Admissions 2026", "Admissions")
+    assert similar("SkyRail Swift", "SkyRail Swift Train 2101 · Chair car 06:10")   # card link with extra text
+
+
+async def test_big_pages_get_more_tab_presses(open_fixture):
+    from backend.walker import MAX_TABS, MAX_TABS_CEILING, tab_limit
+    page = await open_fixture("form.html")
+    assert await tab_limit(page) == MAX_TABS                                   # small page: the spec's 120
+    await page.set_content("".join(f'<a href="#{i}">Link {i}</a> ' for i in range(300)))
+    assert await tab_limit(page) == 310
+    await page.set_content("".join(f'<a href="#{i}">Link {i}</a> ' for i in range(1000)))
+    assert await tab_limit(page) == MAX_TABS_CEILING

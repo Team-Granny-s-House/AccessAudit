@@ -7,7 +7,7 @@ The audit IDs live in the demo laptop's local database (`data/`, not in git), so
 | Target | Task | Audit ID | Result | Replay |
 | --- | --- | --- | --- | --- |
 | SkyRail (broken) | Find trains, select the first train, and enter the passenger name Asha Verma. | `7d658639` | Blocked at step 5 of 6, score 20 (live Agent stream + TinyFish walker) | http://localhost:3000/audit/7d658639?replay=1 |
-| SkyRail (fixed) | Find trains, select the first train, and enter the passenger name Asha Verma. | to be recorded | | |
+| SkyRail (fixed) | Find trains, select the first train, and enter the passenger name Asha Verma. | `6b088df7` | Completed, score 100 (saved baseline + TinyFish walker) | http://localhost:3000/audit/6b088df7?replay=1 |
 | Real site 1 | to be chosen | to be recorded | | |
 | Real site 2 | to be chosen | to be recorded | | |
 
