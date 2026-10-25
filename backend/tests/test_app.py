@@ -19,7 +19,7 @@ STEPS = [
     {"action": "type", "element_text": "Passenger name", "value": "Asha Verma", "description": "Enter the name"},
 ]
 REPORT_KEYS = {"id", "url", "task", "persona", "created_at", "status", "verdict", "score", "blocked_at",
-               "total_steps", "baseline_source", "steps", "issues", "transcript", "page_scans", "notes"}
+               "total_steps", "baseline_source", "cached", "steps", "issues", "transcript", "page_scans", "notes"}
 
 
 @pytest.fixture
@@ -107,6 +107,7 @@ def test_a_late_websocket_gets_the_whole_log(client):
 def test_bad_requests(client):
     assert client.get("/audits/nope").status_code == 404
     assert client.get("/audits/nope/replay").status_code == 404
+    assert client.get("/audits/nope/pdf").status_code == 404
     assert client.post("/audits", json={"url": "ftp://example.com", "task": TASK}).status_code == 422
     assert client.post("/audits", json={"url": "https://example.com", "task": TASK,
                                         "persona": "robot"}).status_code == 422

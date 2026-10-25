@@ -9,6 +9,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from playwright.async_api import TimeoutError as PlaywrightTimeout, async_playwright
 from pydantic import BaseModel
 
 from backend import store
@@ -170,6 +171,36 @@ async def audit_events(ws: WebSocket, audit_id: str):
             await ws.close()
         except RuntimeError:
             pass                                    # already closed by the client
+
+
+@app.get("/audits/{audit_id}/pdf")
+async def audit_pdf(audit_id: str):
+    """Renders the frontend's print view in a local Chromium (never TinyFish) and caches the PDF."""
+    report = store.get_report(audit_id)
+    if report is None:
+        raise HTTPException(404, "No such audit")
+    if report["status"] == "running":
+        raise HTTPException(409, "The audit is still running")
+    path = data_dir() / "pdf" / f"{audit_id}.pdf"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        frontend = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            try:
+                page = await browser.new_page()
+                await page.goto(f"{frontend}/audit/{audit_id}?print=1")
+                await page.wait_for_selector("[data-report-ready]", state="attached", timeout=30_000)
+                await page.wait_for_load_state("networkidle")       # screenshots loaded
+                await page.pdf(path=str(tmp), format="A4", print_background=True,
+                               margin={"top": "14mm", "bottom": "14mm", "left": "12mm", "right": "12mm"})
+            except PlaywrightTimeout:
+                raise HTTPException(503, f"Couldn't render the report; is the frontend running at {frontend}?")
+            finally:
+                await browser.close()
+        tmp.replace(path)
+    return FileResponse(path, media_type="application/pdf", filename=f"accessaudit-{audit_id}.pdf")
 
 
 @app.get("/files/{path:path}")

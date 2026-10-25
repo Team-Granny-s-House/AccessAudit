@@ -122,7 +122,7 @@ def get_report(audit_id: str) -> dict | None:
             return json.loads(audit.report_json)
         return {"id": audit.id, "url": audit.url, "task": audit.task, "persona": audit.persona,
                 "created_at": audit.created_at, "status": audit.status, "verdict": None, "score": None,
-                "blocked_at": None, "total_steps": 0, "baseline_source": None, "steps": [], "issues": [],
+                "blocked_at": None, "total_steps": 0, "baseline_source": None, "cached": False, "steps": [], "issues": [],
                 "transcript": [], "page_scans": [], "notes": []}
 
 

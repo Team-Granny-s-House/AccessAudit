@@ -14,8 +14,8 @@ AccessAudit is being built in stages; this section is updated as each one lands.
 | 1. Demo site | SkyRail broken and fixed copies (live on Vercel), `cli scan` | ✅ Done |
 | 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ✅ Done |
 | 3. API | Backend server, stored reports, live events, replays | ✅ Done |
-| 4. Web app | Audit form, live view, report, PDF | ⏳ Next |
-| 5. Hardening | Real-site audits, baseline cache | Not started |
+| 4. Web app | Audit form, live view, report, PDF | ✅ Done |
+| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ Next |
 | 6. Extras | AI code fixes or a leaderboard | Not started |
 
 ## How an audit works
@@ -149,7 +149,7 @@ All settings live in `.env` at the repo root (see `.env.example`).
 | `FRONTEND_URL` | `http://localhost:3000` | Allowed origin for the API, and the page rendered into PDFs |
 | `DATA_DIR` | `./data` | Database, screenshots, replays, cached baselines and PDFs |
 | `FORCE_BASELINE_OVERRIDE` | `0` | `1` uses hand-checked steps even when the agent succeeds |
-| `CACHE_BASELINES` | `1` | `1` reuses saved agent baselines to save credits; set `0` to see the live stream every time |
+| `CACHE_BASELINES` | `1` | `1` reuses a saved agent baseline for the same URL and exact task (no agent call, no live stream); set `0` to see the live stream every time |
 | `ANTHROPIC_API_KEY`, `LLM_MODEL` | | Optional, for AI-generated code fixes |
 
 ## Demo site: SkyRail

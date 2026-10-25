@@ -1,13 +1,13 @@
 # backend/audit.py
 """Orchestrator: baseline -> keyboard walker -> scans -> score."""
-import asyncio, json, logging, os
+import asyncio, hashlib, json, logging, os
 from pathlib import Path
 
 from backend.axe_scan import AxeError, axe_scan
 from backend.issues import (IssueLog, axe_issue, drop_named_duplicates, name_of, sort_issues,
                             stop_findings, walker_issue)
 from backend.scoring import BLOCKED, score_audit
-from backend.tinyfish_agent import run_baseline
+from backend.tinyfish_agent import normalize_result, run_baseline
 from backend.tinyfish_browser import close_page, open_page
 from backend.tinyfish_fetch import accessibility_statement
 from backend.walker import Screenshots, activate, reach
@@ -25,10 +25,46 @@ def load_override(url: str) -> dict | None:
     return json.loads((BASELINES / name).read_text(encoding="utf-8")) if name else None
 
 
-async def get_baseline(audit: dict, emit, skip_agent: bool, override: dict | None):
-    """Returns (baseline or None, source)."""
-    if skip_agent:
-        return override, "override"
+def cache_path(url: str, task: str) -> Path:
+    """DATA_DIR/cache/baselines/{sha1(url + task)}.json: the exact task string is part of the key."""
+    key = hashlib.sha1((url + task).encode("utf-8")).hexdigest()
+    return Path(os.getenv("DATA_DIR", "./data")) / "cache" / "baselines" / f"{key}.json"
+
+
+def load_cached(url: str, task: str) -> dict | None:
+    """A saved Agent baseline for this URL and task, if CACHE_BASELINES=1 and it is still valid."""
+    path = cache_path(url, task)
+    if os.getenv("CACHE_BASELINES", "1") != "1" or not path.exists():
+        return None
+    try:
+        return normalize_result(json.loads(path.read_text(encoding="utf-8")))
+    except ValueError:
+        log.warning("ignoring unreadable cached baseline %s", path.name)
+        return None
+
+
+def save_cached(url: str, task: str, baseline: dict) -> None:
+    path = cache_path(url, task)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info("saved the Agent baseline to the cache (%s)", path.name)
+
+
+def planned_baseline(audit: dict, use_override: bool, override: dict | None):
+    """A baseline that needs no Agent call, as (baseline, source, cached), or None to run the live Agent."""
+    if use_override and override:
+        return override, "override", False         # CLI --override
+    cached = load_cached(audit["url"], audit["task"])
+    if not cached:
+        return None
+    if override and os.getenv("FORCE_BASELINE_OVERRIDE", "0") == "1":
+        return override, "override", False
+    log.info("using the cached Agent baseline; the Agent is not called")
+    return cached, "agent", True
+
+
+async def run_agent(audit: dict, emit, override: dict | None):
+    """The live Agent baseline, with the hand-checked fallback. Returns (baseline or None, source)."""
 
     async def on_event(e):
         if e.get("type") == "STREAMING_URL":
@@ -124,13 +160,14 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
     """audit: id, url, task, persona, created_at. emit: async (type, data). Returns the report JSON."""
     report = {**{k: audit[k] for k in ("id", "url", "task", "persona", "created_at")},
               "status": "running", "verdict": None, "score": None, "blocked_at": None, "total_steps": 0,
-              "baseline_source": None, "steps": [], "issues": [], "transcript": [], "page_scans": [], "notes": []}
+              "baseline_source": None, "cached": False, "steps": [], "issues": [], "transcript": [],
+              "page_scans": [], "notes": []}
     issues = IssueLog()
     note_task = None
     try:
         override = load_override(audit["url"])
-        skip_agent = use_override and override is not None
-        await emit("baseline_started", {"source": "override" if skip_agent else "agent"})
+        plan = planned_baseline(audit, use_override, override)
+        await emit("baseline_started", {"source": plan[1] if plan else "agent", "cached": bool(plan and plan[2])})
 
         async def statement_note():
             try:
@@ -142,14 +179,20 @@ async def run_audit(audit: dict, emit, use_override: bool = False) -> dict:
             await emit("note", note)
         note_task = asyncio.create_task(statement_note())
 
-        baseline, source = await get_baseline(audit, emit, skip_agent, override)
-        report["baseline_source"] = source
+        if plan:
+            baseline, source, cached = plan
+        else:
+            (baseline, source), cached = await run_agent(audit, emit, override), False
+        report.update(baseline_source=source, cached=cached)
         steps = baseline["steps"] if baseline else []
         report["total_steps"] = len(steps)
         results = []
         if baseline:
-            await emit("baseline_done", {"steps": steps, "source": source})
+            await emit("baseline_done", {"steps": steps, "source": source, "cached": cached})
             results = await walk(audit, steps, emit, report, issues)
+            followed = results and all(r["status"] != "baseline_mismatch" for r in results)
+            if source == "agent" and not cached and followed:   # only baselines the walker could follow
+                save_cached(audit["url"], audit["task"], baseline)
         await note_task
         outcome = score_audit(steps, results, issues.items, baseline_ok=bool(baseline))
         report.update(outcome, status="done", issues=sort_issues(issues.items))
