@@ -120,6 +120,9 @@ async def test_broken_copy_is_blocked_at_the_trap(monkeypatch, tmp_path):
     assert "axe:button-name" not in found                     # the walker's no_name covers it
     trap = next(i for i in report["issues"] if i["check"] == "kb_trap")
     assert (tmp_path / "screens" / "t1" / Path(trap["screenshot"]).name).exists()
+    invisible = [i for i in report["issues"] if i["check"] == "focus_invisible"]
+    assert len(invisible) == 5                                   # every barrier is still reported...
+    assert sum(i["screenshot"] is not None for i in invisible) == audit.SHOTS_PER_CHECK_PER_PAGE   # ...3 with pictures
 
 
 def failing_agent(*codes, steps=AGENT_STEPS):

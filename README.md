@@ -15,7 +15,7 @@ AccessAudit is being built in stages; this section is updated as each one lands.
 | 2. Audit engine | Keyboard walker, issues, scoring, `cli audit`, backend tests | ✅ Done |
 | 3. API | Backend server, stored reports, live events, replays | ✅ Done |
 | 4. Web app | Audit form, live view, report, PDF | ✅ Done |
-| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ In progress: stealth retry, clear error reasons, offline-safe replays and real-site tuning done; SkyRail golden runs recorded in `DEMO.md`; real-site golden runs next |
+| 5. Hardening | Real-site audits, golden runs that replay offline (the baseline cache is already built) | ⏳ Mostly done: stealth retry, clear error reasons, offline-safe replays, real-site tuning, and golden runs for both SkyRail copies and one real government portal (`DEMO.md`); a second real site is next |
 | 6. Extras | AI code fixes or a leaderboard | Not started |
 
 ## How an audit works
@@ -173,7 +173,9 @@ Every audit's events are saved, so any finished audit can be replayed with its o
 
 ## Tested on real sites
 
-Early checks on public Indian government and college sites shaped the walker:
+**CPENGRAMS**, the government's pension grievance portal, task "Open the Contact Us page and find the department's contact email address": **Completed with barriers, score 0.** A keyboard user can reach Contact Us (14th Tab press), but none of the 14 stops on the way shows where focus is, one control has no name, the language dropdown has no label, some text has low contrast and the page has no language set.
+
+Early checks on public Indian government and college sites also shaped the walker:
 
 - A scrolling news ticker of identical "Click here" links is not mistaken for a keyboard trap: each element is identified by its place in the page, not its text.
 - A short label like "Fees" doesn't match a longer link like "Fee Portal", and one word of a long label doesn't match a short link.

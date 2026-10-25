@@ -18,6 +18,7 @@ log = logging.getLogger("accessaudit")
 BASELINES = Path(__file__).parent / "baselines"
 TRANSCRIPT_FIELDS = ("seq", "tag", "text", "announce", "focus_ring", "page_url")
 BLOCKED_CHECK = {"unreachable": "kb_unreachable", "trap": "kb_trap", "no_response": "kb_no_response"}
+SHOTS_PER_CHECK_PER_PAGE = 3    # later issues of the same kind on the same page are reported without a screenshot
 
 
 def load_override(url: str) -> dict | None:
@@ -128,6 +129,7 @@ async def walk(audit: dict, steps: list[dict], emit, report: dict, issues: Issue
     shots = Screenshots(audit["id"], os.getenv("DATA_DIR", "./data"))
     stops, results, scanned, pending_axe = [], [], set(), {}
     state = {"step": 0, "prev": None}
+    shot_counts: dict[tuple, int] = {}              # (page, check) -> screenshots taken so far
 
     async def flush(url):                           # axe issues wait until the page's walker stops are known
         for issue in drop_named_duplicates(pending_axe.pop(url, []), issues.items):
@@ -138,7 +140,12 @@ async def walk(audit: dict, steps: list[dict], emit, report: dict, issues: Issue
         for f in stop_findings(stop, state["prev"]):
             if issues.seen(f["key"]):
                 continue
-            shot = await shots.take(page, outline=True)
+            # each screenshot costs ~10 s in a cloud browser: keep the first few of a kind per page
+            counted = (stop["page_url"], f["check"])
+            shot = None
+            if shot_counts.get(counted, 0) < SHOTS_PER_CHECK_PER_PAGE:
+                shot_counts[counted] = shot_counts.get(counted, 0) + 1
+                shot = await shots.take(page, outline=True)
             issue = walker_issue(f["check"], step_index=state["step"], page_url=stop["page_url"], name=f["name"],
                                  announce=stop["announce"], element_html=stop["html"], screenshot=shot)
             await emit("issue", issues.add(issue, key=f["key"]))
